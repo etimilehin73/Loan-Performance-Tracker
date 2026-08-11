@@ -52,6 +52,11 @@ const gmailMessage = document.getElementById('gmailMessage');
 const gmailCountdown = document.getElementById('gmailCountdown');
 const requestGmailBtn = document.getElementById('requestGmailBtn');
 const verifyGmailBtn = document.getElementById('verifyGmailBtn');
+const rememberEmailCheckbox = document.getElementById('rememberEmail');
+const clearEmailBtn = document.getElementById('clearEmailBtn');
+
+const REMEMBERED_EMAIL_KEY = 'rememberedGmailEmail';
+const SESSION_TOKEN_KEY = 'dashboardSessionToken';
 
 const accessSummary = document.getElementById('accessSummary');
 const appShell = document.querySelector('.app-shell');
@@ -60,6 +65,52 @@ const isDashboardView = Boolean(totalIssuedEl && totalRecoveredEl && totalDefaul
 let gmailTimer = null;
 let gmailExpiresAt = null;
 let gmailValidated = false;
+
+function sessionToken() {
+  return sessionStorage.getItem(SESSION_TOKEN_KEY) || '';
+}
+
+function authHeaders(extra = {}) {
+  const token = sessionToken();
+  return token ? { ...extra, Authorization: `Bearer ${token}` } : extra;
+}
+
+function clearSession() {
+  sessionStorage.removeItem(SESSION_TOKEN_KEY);
+  sessionStorage.removeItem('gmailValidated');
+  gmailValidated = false;
+}
+
+function rememberedEmail() {
+  return localStorage.getItem(REMEMBERED_EMAIL_KEY) || '';
+}
+
+function persistEmailPreference(email) {
+  if (rememberEmailCheckbox && rememberEmailCheckbox.checked && email) {
+    localStorage.setItem(REMEMBERED_EMAIL_KEY, email);
+  } else {
+    localStorage.removeItem(REMEMBERED_EMAIL_KEY);
+  }
+}
+
+function forgetEmail() {
+  localStorage.removeItem(REMEMBERED_EMAIL_KEY);
+
+  if (rememberEmailCheckbox) {
+    rememberEmailCheckbox.checked = false;
+  }
+
+  if (gmailAddress) {
+    gmailAddress.value = '';
+    gmailAddress.focus();
+  }
+
+  if (gmailCodeInput) {
+    gmailCodeInput.value = '';
+  }
+
+  clearGmailFlow();
+}
 
 function loadLocalRecords() {
   try {
@@ -99,8 +150,15 @@ async function fetchLoanRecords() {
   try {
     const response = await apiFetch('/api/loans', {
       method: 'GET',
-      headers: { 'Accept': 'application/json' }
+      headers: authHeaders({ 'Accept': 'application/json' })
     });
+
+    if (response.status === 401) {
+      clearSession();
+      validateAccessUnlock();
+      records = [];
+      return;
+    }
 
     if (!response.ok) {
       throw new Error('Failed to load loan records from backend');
@@ -121,9 +179,15 @@ async function postLoanRecord(record) {
   try {
     const response = await apiFetch('/api/loans', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(record)
     });
+
+    if (response.status === 401) {
+      clearSession();
+      validateAccessUnlock();
+      return records;
+    }
 
     if (!response.ok) {
       throw new Error('Loan save failed');
@@ -352,27 +416,18 @@ if (requestGmailBtn) {
         return;
       }
 
-      // Persist the email so it survives any reload / navigation.
-      localStorage.setItem('pendingGmailEmail', email);
-      sessionStorage.setItem('pendingGmailEmail', email);
+      persistEmailPreference(email);
       sessionStorage.setItem('gmailValidated', 'false');
 
       // Keep the flow on the current page — no redirect, so the email
-      // input is never cleared.
-      if (data.debug_code) {
-        localStorage.setItem('pendingGmailCode', data.debug_code);
-        sessionStorage.setItem('pendingGmailCode', data.debug_code);
-        if (gmailCodeInput) {
-          gmailCodeInput.value = data.debug_code;
-        }
-      } else {
-        localStorage.removeItem('pendingGmailCode');
-        sessionStorage.removeItem('pendingGmailCode');
-      }
-
+      // input keeps whatever was typed into it.
       beginGmailCountdown(Number(data.expires_in) || ACCESS_TIMEOUT_SECONDS);
       if (gmailMessage) {
-        gmailMessage.textContent = data.message || 'Gmail code sent. Check your inbox.';
+        let message = data.message || 'Gmail code sent. Check your inbox.';
+        if (data.debug_code) {
+          message += ` Demo code: ${data.debug_code}`;
+        }
+        gmailMessage.textContent = message;
       }
     } catch (error) {
       gmailMessage.textContent = `Unable to contact backend for Gmail request. Ensure the backend is running at http://127.0.0.1:5000. ${error.message || error}`;
@@ -404,10 +459,19 @@ if (verifyGmailBtn) {
 
       gmailValidated = true;
       sessionStorage.setItem('gmailValidated', 'true');
-      localStorage.setItem('pendingGmailEmail', email);
+      if (data.token) {
+        sessionStorage.setItem(SESSION_TOKEN_KEY, data.token);
+      }
+      persistEmailPreference(email);
       clearGmailFlow();
       gmailMessage.textContent = 'Gmail confirmed successfully.';
       validateAccessUnlock();
+
+      if (isDashboardView) {
+        await fetchLoanRecords();
+        computeSummary();
+        renderRecords();
+      }
 
       // Only navigate back to index when verifying from confirm.html.
       // On the index page the flow completes in place, so the email
@@ -420,6 +484,16 @@ if (verifyGmailBtn) {
     } catch (error) {
       gmailMessage.textContent = `Unable to contact backend for Gmail verification. Ensure the backend is running at http://127.0.0.1:5000. ${error.message || error}`;
     }
+  });
+}
+
+if (clearEmailBtn) {
+  clearEmailBtn.addEventListener('click', forgetEmail);
+}
+
+if (rememberEmailCheckbox && gmailAddress) {
+  rememberEmailCheckbox.addEventListener('change', () => {
+    persistEmailPreference(gmailAddress.value.trim());
   });
 }
 
@@ -457,27 +531,29 @@ if (loanForm) {
 }
 
 (async function initializeApp() {
-  const storedValidation = sessionStorage.getItem('gmailValidated') === 'true';
-  if (storedValidation) {
-    gmailValidated = true;
+  // A dashboard session only counts as unlocked while its token is present.
+  gmailValidated = sessionStorage.getItem('gmailValidated') === 'true' && Boolean(sessionToken());
+  if (!gmailValidated) {
+    clearSession();
   }
 
-  const pendingEmail = sessionStorage.getItem('pendingGmailEmail')
-    || localStorage.getItem('pendingGmailEmail')
-    || new URLSearchParams(window.location.search).get('email')
-    || '';
-  if (gmailAddress && pendingEmail) {
-    gmailAddress.value = pendingEmail;
+  ['pendingGmailEmail', 'pendingGmailCode'].forEach((legacyKey) => {
+    localStorage.removeItem(legacyKey);
+    sessionStorage.removeItem(legacyKey);
+  });
+
+  // The email box is only pre-filled when the user explicitly asked to be
+  // remembered, or when it was carried across pages in the URL.
+  const saved = rememberedEmail();
+  const linkedEmail = new URLSearchParams(window.location.search).get('email') || '';
+  if (gmailAddress) {
+    gmailAddress.value = linkedEmail || saved;
+  }
+  if (rememberEmailCheckbox) {
+    rememberEmailCheckbox.checked = Boolean(saved);
   }
 
-  const pendingCode = sessionStorage.getItem('pendingGmailCode')
-    || localStorage.getItem('pendingGmailCode')
-    || '';
-  if (gmailCodeInput && pendingCode) {
-    gmailCodeInput.value = pendingCode;
-  }
-
-  if (isDashboardView) {
+  if (isDashboardView && gmailValidated) {
     await fetchLoanRecords();
     computeSummary();
     renderRecords();

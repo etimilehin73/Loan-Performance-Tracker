@@ -8,11 +8,15 @@ services:
     envVars:
       - key: GOOGLE_APPLICATION_CREDENTIALS
         sync: false
-      - key: AUTHORIZED_EMAIL
+      - key: AUTHORIZED_EMAILS
         sync: false
       - key: SMTP_EMAIL
         sync: false
       - key: SMTP_PASSWORD
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: EXPORT_TOKEN
         sync: false
       - key: FIREBASE_COLLECTION
         value: loan_records
