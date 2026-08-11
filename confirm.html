@@ -15,8 +15,16 @@
         <div class="access-step">
           <label>
             Authorized Gmail
-            <input type="email" id="gmailAddress" placeholder="executive.confirmation@gmail.com" autocomplete="email" />
+            <input type="email" id="gmailAddress" placeholder="you@example.com" autocomplete="email" />
           </label>
+
+          <div class="email-options">
+            <label class="checkbox-label">
+              <input type="checkbox" id="rememberEmail" />
+              Remember this email on this device
+            </label>
+            <button type="button" class="link-button" id="clearEmailBtn">Use a different email</button>
+          </div>
 
           <label>
             Enter Gmail code
@@ -41,6 +49,6 @@
       </div>
     </div>
 
-<script src="script.js?v=6"></script>
+<script src="script.js?v=7"></script>
   </body>
 </html>

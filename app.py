@@ -1,9 +1,11 @@
 import csv
 import io
 import os
+import re
+import secrets
 import smtplib
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -31,15 +33,33 @@ DEFAULT_RECORDS = [
 
 SMTP_EMAIL = os.getenv('SMTP_EMAIL')
 SMTP_PASSWORD = os.getenv('SMTP_PASSWORD')
-DEFAULT_AUTHORIZED_EMAIL = 'executive.confirmation@gmail.com'
-AUTHORIZED_EMAILS = tuple(dict.fromkeys([
-    email.strip().lower()
-    for email in [
-        os.getenv('AUTHORIZED_EMAIL', ''),
-        DEFAULT_AUTHORIZED_EMAIL,
-    ]
-    if email and email.strip()
-]))
+
+EMAIL_PATTERN = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
+
+# Minimum delay between two code requests for the same address, and the
+# maximum number of requests allowed for that address per hour.
+CODE_REQUEST_MIN_INTERVAL_SECONDS = 30
+CODE_REQUEST_HOURLY_LIMIT = 5
+_code_request_history: dict[str, list[float]] = {}
+
+
+def _parse_email_list(*raw_values) -> tuple[str, ...]:
+    emails = []
+    for raw in raw_values:
+        for candidate in (raw or '').replace(';', ',').split(','):
+            candidate = candidate.strip().lower()
+            if candidate:
+                emails.append(candidate)
+    return tuple(dict.fromkeys(emails))
+
+
+# Addresses allowed through the access gate. When neither variable is set the
+# app accepts any well-formed address, so a new deployment is usable before it
+# is locked down to a specific team.
+AUTHORIZED_EMAILS = _parse_email_list(
+    os.getenv('AUTHORIZED_EMAILS', ''),
+    os.getenv('AUTHORIZED_EMAIL', ''),
+)
 
 FIREBASE_COLLECTION = os.getenv('FIREBASE_COLLECTION', 'loan_records')
 FIREBASE_VERIFICATIONS_COLLECTION = os.getenv('FIREBASE_VERIFICATIONS_COLLECTION', 'verification_codes')
@@ -81,12 +101,37 @@ except Exception as exc:  # pragma: no cover
     _firebase_error = 'Firebase initialization failed: %s' % exc
 
 
+def is_valid_email(email: str) -> bool:
+    return bool(EMAIL_PATTERN.match(normalize_email(email)))
+
+
 def is_authorized_email(email: str) -> bool:
+    if not is_valid_email(email):
+        return False
+    if not AUTHORIZED_EMAILS:
+        return True
     return normalize_email(email) in AUTHORIZED_EMAILS
 
 
+def code_request_retry_after(email: str) -> int:
+    """Seconds the caller must wait before requesting another code, or 0."""
+    now = time.time()
+    history = [ts for ts in _code_request_history.get(normalize_email(email), []) if now - ts < 3600]
+    _code_request_history[normalize_email(email)] = history
+
+    if history and now - history[-1] < CODE_REQUEST_MIN_INTERVAL_SECONDS:
+        return int(CODE_REQUEST_MIN_INTERVAL_SECONDS - (now - history[-1])) + 1
+    if len(history) >= CODE_REQUEST_HOURLY_LIMIT:
+        return int(3600 - (now - history[0])) + 1
+    return 0
+
+
+def record_code_request(email: str):
+    _code_request_history.setdefault(normalize_email(email), []).append(time.time())
+
+
 def generate_code():
-    return str(100000 + int(os.urandom(2).hex(), 16) % 900000)
+    return str(secrets.randbelow(900000) + 100000)
 
 
 def normalize_email(email: str) -> str:
@@ -178,9 +223,13 @@ def _initialize_sqlite():
             for record in DEFAULT_RECORDS:
                 conn.execute(
                     'INSERT INTO loan_records (month, issued, recovered, defaulted, created_at) VALUES (?, ?, ?, ?, ?)',
-                    (record['month'], record['issued'], record['recovered'], record['defaulted'], datetime.utcnow().isoformat()),
+                    (record['month'], record['issued'], record['recovered'], record['defaulted'], _utc_now_iso()),
                 )
             conn.commit()
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _disable_firestore(error):
@@ -206,7 +255,7 @@ def save_loan_record(record: dict):
     if _use_firestore():
         try:
             doc = dict(record)
-            doc['created_at'] = datetime.utcnow().isoformat()
+            doc['created_at'] = _utc_now_iso()
             firestore_db.collection(FIREBASE_COLLECTION).add(doc)
             return
         except Exception as exc:  # pragma: no cover
@@ -215,7 +264,7 @@ def save_loan_record(record: dict):
     with _sqlite_connection() as conn:
         conn.execute(
             'INSERT INTO loan_records (month, issued, recovered, defaulted, created_at) VALUES (?, ?, ?, ?, ?)',
-            (record['month'], record['issued'], record['recovered'], record['defaulted'], datetime.utcnow().isoformat()),
+            (record['month'], record['issued'], record['recovered'], record['defaulted'], _utc_now_iso()),
         )
         conn.commit()
 
@@ -319,8 +368,18 @@ def request_gmail():
     email_address = (payload.get('email') or '').strip()
     if not email_address:
         return jsonify({'error': 'Email address is required.'}), 400
+    if not is_valid_email(email_address):
+        return jsonify({'error': 'Enter a valid email address.'}), 400
     if not is_authorized_email(email_address):
         return jsonify({'error': 'Email address is not authorized for this application.'}), 403
+
+    retry_after = code_request_retry_after(email_address)
+    if retry_after:
+        response = jsonify({'error': f'Too many code requests. Try again in {retry_after}s.'})
+        response.headers['Retry-After'] = str(retry_after)
+        return response, 429
+
+    record_code_request(email_address)
     code = generate_code()
     expires_at = store_verification('gmail', email_address, code)
     sent, error = send_gmail_message(email_address, code)
@@ -405,7 +464,11 @@ def export_csv():
     return response
 
 
+# Create the SQLite schema eagerly so the fallback also works under gunicorn,
+# where the __main__ block below never runs.
+if not _use_firestore():
+    _initialize_sqlite()
+
+
 if __name__ == '__main__':
-    if not _use_firestore():
-        _initialize_sqlite()
     app.run(host='0.0.0.0', port=int(os.getenv('PORT', '5000')), debug=True)

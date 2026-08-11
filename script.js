@@ -52,6 +52,10 @@ const gmailMessage = document.getElementById('gmailMessage');
 const gmailCountdown = document.getElementById('gmailCountdown');
 const requestGmailBtn = document.getElementById('requestGmailBtn');
 const verifyGmailBtn = document.getElementById('verifyGmailBtn');
+const rememberEmailCheckbox = document.getElementById('rememberEmail');
+const clearEmailBtn = document.getElementById('clearEmailBtn');
+
+const REMEMBERED_EMAIL_KEY = 'rememberedGmailEmail';
 
 const accessSummary = document.getElementById('accessSummary');
 const appShell = document.querySelector('.app-shell');
@@ -60,6 +64,37 @@ const isDashboardView = Boolean(totalIssuedEl && totalRecoveredEl && totalDefaul
 let gmailTimer = null;
 let gmailExpiresAt = null;
 let gmailValidated = false;
+
+function rememberedEmail() {
+  return localStorage.getItem(REMEMBERED_EMAIL_KEY) || '';
+}
+
+function persistEmailPreference(email) {
+  if (rememberEmailCheckbox && rememberEmailCheckbox.checked && email) {
+    localStorage.setItem(REMEMBERED_EMAIL_KEY, email);
+  } else {
+    localStorage.removeItem(REMEMBERED_EMAIL_KEY);
+  }
+}
+
+function forgetEmail() {
+  localStorage.removeItem(REMEMBERED_EMAIL_KEY);
+
+  if (rememberEmailCheckbox) {
+    rememberEmailCheckbox.checked = false;
+  }
+
+  if (gmailAddress) {
+    gmailAddress.value = '';
+    gmailAddress.focus();
+  }
+
+  if (gmailCodeInput) {
+    gmailCodeInput.value = '';
+  }
+
+  clearGmailFlow();
+}
 
 function loadLocalRecords() {
   try {
@@ -352,27 +387,18 @@ if (requestGmailBtn) {
         return;
       }
 
-      // Persist the email so it survives any reload / navigation.
-      localStorage.setItem('pendingGmailEmail', email);
-      sessionStorage.setItem('pendingGmailEmail', email);
+      persistEmailPreference(email);
       sessionStorage.setItem('gmailValidated', 'false');
 
       // Keep the flow on the current page — no redirect, so the email
-      // input is never cleared.
-      if (data.debug_code) {
-        localStorage.setItem('pendingGmailCode', data.debug_code);
-        sessionStorage.setItem('pendingGmailCode', data.debug_code);
-        if (gmailCodeInput) {
-          gmailCodeInput.value = data.debug_code;
-        }
-      } else {
-        localStorage.removeItem('pendingGmailCode');
-        sessionStorage.removeItem('pendingGmailCode');
-      }
-
+      // input keeps whatever was typed into it.
       beginGmailCountdown(Number(data.expires_in) || ACCESS_TIMEOUT_SECONDS);
       if (gmailMessage) {
-        gmailMessage.textContent = data.message || 'Gmail code sent. Check your inbox.';
+        let message = data.message || 'Gmail code sent. Check your inbox.';
+        if (data.debug_code) {
+          message += ` Demo code: ${data.debug_code}`;
+        }
+        gmailMessage.textContent = message;
       }
     } catch (error) {
       gmailMessage.textContent = `Unable to contact backend for Gmail request. Ensure the backend is running at http://127.0.0.1:5000. ${error.message || error}`;
@@ -404,7 +430,7 @@ if (verifyGmailBtn) {
 
       gmailValidated = true;
       sessionStorage.setItem('gmailValidated', 'true');
-      localStorage.setItem('pendingGmailEmail', email);
+      persistEmailPreference(email);
       clearGmailFlow();
       gmailMessage.textContent = 'Gmail confirmed successfully.';
       validateAccessUnlock();
@@ -420,6 +446,16 @@ if (verifyGmailBtn) {
     } catch (error) {
       gmailMessage.textContent = `Unable to contact backend for Gmail verification. Ensure the backend is running at http://127.0.0.1:5000. ${error.message || error}`;
     }
+  });
+}
+
+if (clearEmailBtn) {
+  clearEmailBtn.addEventListener('click', forgetEmail);
+}
+
+if (rememberEmailCheckbox && gmailAddress) {
+  rememberEmailCheckbox.addEventListener('change', () => {
+    persistEmailPreference(gmailAddress.value.trim());
   });
 }
 
@@ -462,19 +498,20 @@ if (loanForm) {
     gmailValidated = true;
   }
 
-  const pendingEmail = sessionStorage.getItem('pendingGmailEmail')
-    || localStorage.getItem('pendingGmailEmail')
-    || new URLSearchParams(window.location.search).get('email')
-    || '';
-  if (gmailAddress && pendingEmail) {
-    gmailAddress.value = pendingEmail;
-  }
+  ['pendingGmailEmail', 'pendingGmailCode'].forEach((legacyKey) => {
+    localStorage.removeItem(legacyKey);
+    sessionStorage.removeItem(legacyKey);
+  });
 
-  const pendingCode = sessionStorage.getItem('pendingGmailCode')
-    || localStorage.getItem('pendingGmailCode')
-    || '';
-  if (gmailCodeInput && pendingCode) {
-    gmailCodeInput.value = pendingCode;
+  // The email box is only pre-filled when the user explicitly asked to be
+  // remembered, or when it was carried across pages in the URL.
+  const saved = rememberedEmail();
+  const linkedEmail = new URLSearchParams(window.location.search).get('email') || '';
+  if (gmailAddress) {
+    gmailAddress.value = linkedEmail || saved;
+  }
+  if (rememberEmailCheckbox) {
+    rememberEmailCheckbox.checked = Boolean(saved);
   }
 
   if (isDashboardView) {

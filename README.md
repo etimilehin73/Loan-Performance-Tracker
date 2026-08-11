@@ -52,7 +52,13 @@ Then open `.env` and set:
 
 - `SMTP_EMAIL` — your Gmail address used for SMTP
 - `SMTP_PASSWORD` — your Gmail app password or SMTP password
-- `AUTHORIZED_EMAIL` — the only Gmail address authorized to use the app (defaults to `executive.confirmation@gmail.com` if omitted)
+- `AUTHORIZED_EMAILS` — comma-separated list of addresses allowed through the access gate
+  (e.g. `ops@example.com,exec@example.com`). **Leave it empty and any valid email address is
+  accepted** — convenient locally, so set it before exposing the app publicly. The older
+  single-value `AUTHORIZED_EMAIL` is still read for backwards compatibility.
+
+The access gate never pre-fills your email unless you tick **Remember this email on this device**;
+**Use a different email** clears the saved address.
 
 > If no SMTP is configured, the app runs in **demo mode** and shows the generated code on-screen so you can still test the flow.
 
@@ -130,7 +136,7 @@ Netlify cannot run Python, so to keep the Flask backend, deploy on **Render**.
    
    The simplest reliable setup is to include the JSON file in the repo (it's already `.gitignore`d, so if you want it in the repo you must force-add it) — but be aware that exposes your key to your repo access. For production security, decode it from a Render secret.
 5. Add these env vars too:
-   - `AUTHORIZED_EMAIL` — the Gmail allowed to access the dashboard
+   - `AUTHORIZED_EMAILS` — comma-separated addresses allowed to access the dashboard
    - `SMTP_EMAIL`, `SMTP_PASSWORD` — for sending real Gmail codes (optional)
    - `FIREBASE_COLLECTION=loan_records`
    - `FIREBASE_VERIFICATIONS_COLLECTION=verification_codes`
@@ -176,8 +182,8 @@ http://127.0.0.1:5000/api/export/csv
 ## Features
 
 - Flask backend with Firebase Firestore (cloud) + SQLite fallback (local)
-- Gmail confirmation access gate (60-second code expiry)
-- Authorization restricted to one configured Gmail address
+- Gmail confirmation access gate (60-second code expiry, rate-limited code requests)
+- Authorization restricted to a configurable list of email addresses
 - Export loan data as CSV for Power BI or reporting
 - Deployable to Render
 
