@@ -8,15 +8,11 @@ services:
     envVars:
       - key: GOOGLE_APPLICATION_CREDENTIALS
         sync: false
-      - key: AUTHORIZED_EMAILS
+      - key: AUTHORIZED_EMAIL
         sync: false
-      - key: SMTP_EMAIL
+      - key: MAILGUN_DOMAIN
         sync: false
-      - key: SMTP_PASSWORD
-        sync: false
-      - key: SECRET_KEY
-        generateValue: true
-      - key: EXPORT_TOKEN
+      - key: MAILGUN_API_KEY
         sync: false
       - key: FIREBASE_COLLECTION
         value: loan_records
