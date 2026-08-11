@@ -1,19 +1,11 @@
-import base64
 import csv
-import hashlib
-import hmac
 import io
-import json
 import os
-import re
-import secrets
-import smtplib
 import time
-from datetime import datetime, timezone
-from email.message import EmailMessage
-from functools import wraps
+from datetime import datetime
 from pathlib import Path
 
+import requests
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -36,45 +28,17 @@ DEFAULT_RECORDS = [
     {'month': 'May 2026', 'issued': 141000, 'recovered': 17500, 'defaulted': 4000},
 ]
 
-SMTP_EMAIL = os.getenv('SMTP_EMAIL')
-SMTP_PASSWORD = os.getenv('SMTP_PASSWORD')
-
-EMAIL_PATTERN = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
-
-# Minimum delay between two code requests for the same address, and the
-# maximum number of requests allowed for that address per hour.
-CODE_REQUEST_MIN_INTERVAL_SECONDS = 30
-CODE_REQUEST_HOURLY_LIMIT = 5
-_code_request_history: dict[str, list[float]] = {}
-
-
-def _parse_email_list(*raw_values) -> tuple[str, ...]:
-    emails = []
-    for raw in raw_values:
-        for candidate in (raw or '').replace(';', ',').split(','):
-            candidate = candidate.strip().lower()
-            if candidate:
-                emails.append(candidate)
-    return tuple(dict.fromkeys(emails))
-
-
-# Addresses allowed through the access gate. When neither variable is set the
-# app accepts any well-formed address, so a new deployment is usable before it
-# is locked down to a specific team.
-AUTHORIZED_EMAILS = _parse_email_list(
-    os.getenv('AUTHORIZED_EMAILS', ''),
-    os.getenv('AUTHORIZED_EMAIL', ''),
-)
-
-# Secret used to sign dashboard session tokens. Generated per process when
-# unset, which invalidates existing tokens on restart and across gunicorn
-# workers, so set it in production.
-SECRET_KEY = os.getenv('SECRET_KEY') or secrets.token_urlsafe(32)
-SESSION_TTL_SECONDS = int(os.getenv('SESSION_TTL_SECONDS', str(12 * 3600)))
-
-# Long-lived token for unattended CSV readers such as Power BI, passed as
-# ?token=... . When unset the export endpoint only accepts a session token.
-EXPORT_TOKEN = os.getenv('EXPORT_TOKEN', '')
+MAILGUN_DOMAIN = os.getenv('MAILGUN_DOMAIN')
+MAILGUN_API_KEY = os.getenv('MAILGUN_API_KEY')
+DEFAULT_AUTHORIZED_EMAIL = 'executive.confirmation@gmail.com'
+AUTHORIZED_EMAILS = tuple(dict.fromkeys([
+    email.strip().lower()
+    for email in [
+        os.getenv('AUTHORIZED_EMAIL', ''),
+        DEFAULT_AUTHORIZED_EMAIL,
+    ]
+    if email and email.strip()
+]))
 
 FIREBASE_COLLECTION = os.getenv('FIREBASE_COLLECTION', 'loan_records')
 FIREBASE_VERIFICATIONS_COLLECTION = os.getenv('FIREBASE_VERIFICATIONS_COLLECTION', 'verification_codes')
@@ -116,37 +80,12 @@ except Exception as exc:  # pragma: no cover
     _firebase_error = 'Firebase initialization failed: %s' % exc
 
 
-def is_valid_email(email: str) -> bool:
-    return bool(EMAIL_PATTERN.match(normalize_email(email)))
-
-
 def is_authorized_email(email: str) -> bool:
-    if not is_valid_email(email):
-        return False
-    if not AUTHORIZED_EMAILS:
-        return True
     return normalize_email(email) in AUTHORIZED_EMAILS
 
 
-def code_request_retry_after(email: str) -> int:
-    """Seconds the caller must wait before requesting another code, or 0."""
-    now = time.time()
-    history = [ts for ts in _code_request_history.get(normalize_email(email), []) if now - ts < 3600]
-    _code_request_history[normalize_email(email)] = history
-
-    if history and now - history[-1] < CODE_REQUEST_MIN_INTERVAL_SECONDS:
-        return int(CODE_REQUEST_MIN_INTERVAL_SECONDS - (now - history[-1])) + 1
-    if len(history) >= CODE_REQUEST_HOURLY_LIMIT:
-        return int(3600 - (now - history[0])) + 1
-    return 0
-
-
-def record_code_request(email: str):
-    _code_request_history.setdefault(normalize_email(email), []).append(time.time())
-
-
 def generate_code():
-    return str(secrets.randbelow(900000) + 100000)
+    return str(100000 + int(os.urandom(2).hex(), 16) % 900000)
 
 
 def normalize_email(email: str) -> str:
@@ -157,24 +96,25 @@ def normalize_verification_target(channel: str, target: str) -> str:
     return normalize_email(target)
 
 
-def send_gmail_message(email_address: str, code: str) -> tuple[bool, str]:
-    if not (SMTP_EMAIL and SMTP_PASSWORD):
-        return False, 'SMTP configuration is missing. Ensure SMTP_EMAIL and SMTP_PASSWORD are set.'
+def send_mailgun_message(email_address: str, code: str) -> tuple[bool, str]:
+    if not (MAILGUN_DOMAIN and MAILGUN_API_KEY):
+        return False, 'Mailgun configuration is missing. Ensure MAILGUN_DOMAIN and MAILGUN_API_KEY are set.'
 
     try:
-        message = EmailMessage()
-        message['Subject'] = 'Loan Performance Tracker access code'
-        message['From'] = SMTP_EMAIL
-        message['To'] = email_address
-        message.set_content(f'Your Loan Performance Tracker Gmail code is: {code}')
-
-        with smtplib.SMTP('smtp.gmail.com', 587, timeout=20) as smtp:
-            smtp.ehlo()
-            smtp.starttls()
-            smtp.login(SMTP_EMAIL, SMTP_PASSWORD)
-            smtp.send_message(message)
-
-        return True, ''
+        response = requests.post(
+            f'https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages',
+            auth=('api', MAILGUN_API_KEY),
+            data={
+                'from': f'Loan Tracker <mailgun@{MAILGUN_DOMAIN}>',
+                'to': email_address,
+                'subject': 'Loan Performance Tracker access code',
+                'text': f'Your Loan Performance Tracker access code is: {code}'
+            },
+            timeout=20
+        )
+        if response.status_code == 200:
+            return True, ''
+        return False, f'Mailgun API error: {response.status_code} - {response.text}'
     except Exception as exc:
         return False, str(exc)
 
@@ -238,13 +178,9 @@ def _initialize_sqlite():
             for record in DEFAULT_RECORDS:
                 conn.execute(
                     'INSERT INTO loan_records (month, issued, recovered, defaulted, created_at) VALUES (?, ?, ?, ?, ?)',
-                    (record['month'], record['issued'], record['recovered'], record['defaulted'], _utc_now_iso()),
+                    (record['month'], record['issued'], record['recovered'], record['defaulted'], datetime.utcnow().isoformat()),
                 )
             conn.commit()
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _disable_firestore(error):
@@ -270,7 +206,7 @@ def save_loan_record(record: dict):
     if _use_firestore():
         try:
             doc = dict(record)
-            doc['created_at'] = _utc_now_iso()
+            doc['created_at'] = datetime.utcnow().isoformat()
             firestore_db.collection(FIREBASE_COLLECTION).add(doc)
             return
         except Exception as exc:  # pragma: no cover
@@ -279,7 +215,7 @@ def save_loan_record(record: dict):
     with _sqlite_connection() as conn:
         conn.execute(
             'INSERT INTO loan_records (month, issued, recovered, defaulted, created_at) VALUES (?, ?, ?, ?, ?)',
-            (record['month'], record['issued'], record['recovered'], record['defaulted'], _utc_now_iso()),
+            (record['month'], record['issued'], record['recovered'], record['defaulted'], datetime.utcnow().isoformat()),
         )
         conn.commit()
 
@@ -355,70 +291,6 @@ def verify_code(channel: str, target: str, code: str):
 
 
 # ---------------------------------------------------------------------------
-# Dashboard session tokens
-# ---------------------------------------------------------------------------
-def _sign(payload: bytes) -> str:
-    digest = hmac.new(SECRET_KEY.encode(), payload, hashlib.sha256).digest()
-    return base64.urlsafe_b64encode(digest).decode().rstrip('=')
-
-
-def _b64encode(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).decode().rstrip('=')
-
-
-def _b64decode(value: str) -> bytes:
-    return base64.urlsafe_b64decode(value + '=' * (-len(value) % 4))
-
-
-def issue_session_token(email: str) -> str:
-    payload = json.dumps({
-        'email': normalize_email(email),
-        'exp': int(time.time()) + SESSION_TTL_SECONDS,
-    }, separators=(',', ':')).encode()
-    body = _b64encode(payload)
-    return f'{body}.{_sign(payload)}'
-
-
-def session_token_email(token: str):
-    """Return the email a valid, unexpired token belongs to, else None."""
-    try:
-        body, signature = (token or '').split('.', 1)
-        payload = _b64decode(body)
-    except (ValueError, TypeError):
-        return None
-
-    if not hmac.compare_digest(signature, _sign(payload)):
-        return None
-
-    try:
-        claims = json.loads(payload)
-    except ValueError:
-        return None
-
-    if claims.get('exp', 0) < int(time.time()):
-        return None
-    if not is_authorized_email(claims.get('email', '')):
-        return None
-    return claims['email']
-
-
-def _bearer_token() -> str:
-    header = request.headers.get('Authorization', '')
-    if header.startswith('Bearer '):
-        return header[len('Bearer '):].strip()
-    return ''
-
-
-def requires_session(view):
-    @wraps(view)
-    def wrapper(*args, **kwargs):
-        if not session_token_email(_bearer_token()):
-            return jsonify({'error': 'Authentication required. Complete email confirmation first.'}), 401
-        return view(*args, **kwargs)
-    return wrapper
-
-
-# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 @app.route('/')
@@ -435,7 +307,7 @@ def static_file(path):
 def health():
     return jsonify({
         'status': 'ok',
-        'version': '1.1',
+        'version': '1.2',
         'database': 'firestore' if _use_firestore() else ('sqlite-fallback' if _firebase_error is None else 'sqlite'),
         'firebase_error': _firebase_error,
     })
@@ -447,38 +319,28 @@ def request_gmail():
     email_address = (payload.get('email') or '').strip()
     if not email_address:
         return jsonify({'error': 'Email address is required.'}), 400
-    if not is_valid_email(email_address):
-        return jsonify({'error': 'Enter a valid email address.'}), 400
     if not is_authorized_email(email_address):
         return jsonify({'error': 'Email address is not authorized for this application.'}), 403
-
-    retry_after = code_request_retry_after(email_address)
-    if retry_after:
-        response = jsonify({'error': f'Too many code requests. Try again in {retry_after}s.'})
-        response.headers['Retry-After'] = str(retry_after)
-        return response, 429
-
-    record_code_request(email_address)
     code = generate_code()
     expires_at = store_verification('gmail', email_address, code)
-    sent, error = send_gmail_message(email_address, code)
+    sent, error = send_mailgun_message(email_address, code)
     if not sent:
-        if 'SMTP configuration is missing' in (error or ''):
+        if 'Mailgun configuration is missing' in (error or ''):
             return jsonify({
                 'success': True,
-                'message': 'Gmail code generated in demo mode. Use the displayed code to continue.',
+                'message': 'Access code generated in demo mode. Use the displayed code to continue.',
                 'expires_in': expires_at - int(time.time()),
                 'debug_code': code,
             })
 
         return jsonify({
-            'error': 'Gmail provider is not configured or failed to send. Configure SMTP settings to send the code to the email address.',
+            'error': 'Mailgun provider is not configured or failed to send. Configure MAILGUN_DOMAIN and MAILGUN_API_KEY to send the code to the email address.',
             'details': error,
         }), 500
 
     return jsonify({
         'success': True,
-        'message': 'Gmail code request processed.',
+        'message': 'Access code request processed.',
         'expires_in': expires_at - int(time.time()),
     })
 
@@ -495,18 +357,12 @@ def verify_gmail():
 
     verified, reason = verify_code('gmail', email_address, code)
     if verified:
-        return jsonify({
-            'success': True,
-            'message': 'Gmail confirmation verified.',
-            'token': issue_session_token(email_address),
-            'expires_in': SESSION_TTL_SECONDS,
-        })
+        return jsonify({'success': True, 'message': 'Gmail confirmation verified.'})
 
     return jsonify({'error': f'Gmail verification failed: {reason}.'}), 400
 
 
 @app.route('/api/loans', methods=['GET', 'POST'])
-@requires_session
 def loans():
     if request.method == 'GET':
         return jsonify(fetch_loan_records())
@@ -534,13 +390,6 @@ def loans():
 
 @app.route('/api/export/csv', methods=['GET'])
 def export_csv():
-    supplied = _bearer_token() or request.args.get('token', '')
-    authorized = bool(session_token_email(supplied)) or (
-        EXPORT_TOKEN and hmac.compare_digest(supplied, EXPORT_TOKEN)
-    )
-    if not authorized:
-        return jsonify({'error': 'A session token or EXPORT_TOKEN is required to export data.'}), 401
-
     rows = fetch_loan_records()
     output = io.StringIO()
     writer = csv.writer(output)
@@ -556,10 +405,10 @@ def export_csv():
     return response
 
 
-# Create the SQLite schema eagerly so the fallback also works under gunicorn,
-# where the __main__ block below never runs.
-if not _use_firestore():
-    _initialize_sqlite()
+if __name__ == '__main__':
+    if not _use_firestore():
+        _initialize_sqlite()
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', '5000')), debug=True)
 
 
 if __name__ == '__main__':
