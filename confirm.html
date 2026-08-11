@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Confirm Gmail Access</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="access-gate" aria-live="polite">
+      <div class="access-gate-panel" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+        <h1 id="confirmTitle">Gmail confirmation</h1>
+        <p class="access-gate-copy">Enter the code sent to your authorized Gmail inbox to unlock the dashboard.</p>
+
+        <div class="access-step">
+          <label>
+            Authorized Gmail
+            <input type="email" id="gmailAddress" placeholder="executive.confirmation@gmail.com" autocomplete="email" />
+          </label>
+
+          <label>
+            Enter Gmail code
+            <input type="text" id="gmailCodeInput" placeholder="654321" maxlength="6" autocomplete="one-time-code" />
+          </label>
+
+          <div class="access-action-row">
+            <button type="button" id="verifyGmailBtn">Verify Gmail</button>
+            <span id="gmailCountdown" class="countdown"></span>
+          </div>
+
+          <p class="access-message" id="gmailMessage" aria-live="polite"></p>
+        </div>
+
+        <div class="access-summary" id="accessSummary">
+          <strong>Complete Gmail confirmation to access the dashboard.</strong>
+        </div>
+
+        <div class="confirm-actions">
+          <a href="index.html" class="confirm-link" id="returnLink">Return to dashboard</a>
+        </div>
+      </div>
+    </div>
+
+<script src="script.js?v=6"></script>
+  </body>
+</html>

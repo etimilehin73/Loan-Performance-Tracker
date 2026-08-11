@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: loan-performance-tracker
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn app:app"
+    envVars:
+      - key: GOOGLE_APPLICATION_CREDENTIALS
+        sync: false
+      - key: AUTHORIZED_EMAIL
+        sync: false
+      - key: SMTP_EMAIL
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: FIREBASE_COLLECTION
+        value: loan_records
+      - key: FIREBASE_VERIFICATIONS_COLLECTION
+        value: verification_codes
+

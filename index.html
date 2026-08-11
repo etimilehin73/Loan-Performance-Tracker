@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Loan Performance Tracker</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="accessGate" class="access-gate" aria-live="polite">
+      <div class="access-gate-panel" role="dialog" aria-modal="true" aria-labelledby="accessGateTitle">
+        <h1 id="accessGateTitle">Secure Access Required</h1>
+        <p class="access-gate-copy">Only authorized personnel can open this dashboard. Complete Gmail confirmation within 60 seconds.</p>
+
+        <div class="access-step" id="gmailStep">
+          <h2>Gmail confirmation</h2>
+          <label>
+            Authorized Gmail
+            <input type="email" id="gmailAddress" placeholder="executive.confirmation@gmail.com" autocomplete="email" />
+          </label>
+
+          <div class="access-action-row">
+            <button type="button" id="requestGmailBtn">Request Gmail code</button>
+            <span id="gmailCountdown" class="countdown"></span>
+          </div>
+
+          <label>
+            Enter Gmail code
+            <input type="text" id="gmailCodeInput" placeholder="654321" maxlength="6" autocomplete="one-time-code" />
+          </label>
+          <button type="button" id="verifyGmailBtn" disabled>Verify Gmail</button>
+          <p class="access-message" id="gmailMessage" aria-live="polite"></p>
+        </div>
+
+        <div class="access-summary" id="accessSummary">
+          <strong>Access locked.</strong> Complete Gmail confirmation to open the dashboard.
+        </div>
+      </div>
+    </div>
+
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Drey Portfolio Monitor</p>
+          <h1>Monthly Loan Portfolio Tracker</h1>
+          <p class="subtitle">
+            Daily applications flow into monthly disbursement, with repayment collected in monthly installments over a 3–12 month tenor at 4% pricing.
+          </p>
+        </div>
+
+        <div class="header-badge" aria-label="Portfolio status review">
+          <span class="badge-title">Executive Status</span>
+          <strong>Healthy Growth</strong>
+        </div>
+      </header>
+
+      <section class="executive-title-block" aria-label="Executive report summary">
+        <div>
+          <span class="block-label">Executive Title</span>
+          <strong>Monthly Loan Portfolio Performance Review</strong>
+        </div>
+        <div>
+          <span class="block-label">Prepared by</span>
+          <strong>Operations Department</strong>
+        </div>
+        <div>
+          <span class="block-label">Reviewed by</span>
+          <strong>Executive Management</strong>
+        </div>
+        <div>
+          <span class="block-label">Reporting Period</span>
+          <strong>June 2026</strong>
+        </div>
+        <div>
+          <span class="block-label">Focus</span>
+          <strong>Disbursement, Recovery, Default</strong>
+        </div>
+      </section>
+
+      <section class="recommendation-strip" aria-label="Management recommendation">
+        <span class="recommendation-label">Management Recommendation</span>
+        <strong>Maintain the current month-on-month disbursement pace while tightening recovery discipline to reduce default pressure.</strong>
+      </section>
+
+      <main class="dashboard">
+        <section class="summary-grid">
+          <article class="stat-card accent-blue">
+            <span>Total Disbursed</span>
+            <strong id="totalIssued">$0</strong>
+            <small>Accumulated monthly disbursement</small>
+          </article>
+
+          <article class="stat-card accent-green">
+            <span>Total Recovered</span>
+            <strong id="totalRecovered">$0</strong>
+            <small>Months of installment recovery</small>
+          </article>
+
+          <article class="stat-card accent-gold">
+            <span>Total Defaulted</span>
+            <strong id="totalDefaulted">$0</strong>
+            <small>At-risk or missed collections</small>
+          </article>
+
+          <article class="stat-card accent-pink">
+            <span>Net Portfolio</span>
+            <strong id="netPortfolio">$0</strong>
+            <small>Recovered less defaults</small>
+          </article>
+        </section>
+
+        <section class="insight-grid">
+          <article class="panel insight-panel">
+            <div class="panel-title-row">
+              <h2>Executive Snapshot</h2>
+              <span class="panel-pill">Board-ready</span>
+            </div>
+
+            <div class="insight-list">
+              <div>
+                <span>Recovery rate</span>
+                <strong id="recoveryRate">0%</strong>
+              </div>
+              <div>
+                <span>Default exposure</span>
+                <strong id="defaultExposure">0%</strong>
+              </div>
+              <div>
+                <span>Cash inflow</span>
+                <strong id="cashInflow">$0</strong>
+              </div>
+            </div>
+          </article>
+
+          <article class="panel insight-panel">
+            <div class="panel-title-row">
+              <h2>Portfolio Notes</h2>
+              <span class="panel-pill alt">Management view</span>
+            </div>
+
+            <div class="note-card">
+              <p id="portfolioNote">
+                The portfolio is going through a structured monthly cycle: disbursements are booked up front, repayments come in through monthly installments, and defaults are isolated as loss exposure.
+              </p>
+            </div>
+          </article>
+        </section>
+
+        <section class="chart-grid">
+          <article class="panel chart-panel">
+            <div class="panel-title-row">
+              <h2>Monthly Flow Trend</h2>
+              <span class="panel-pill alt">Cash movement</span>
+            </div>
+
+            <div class="chart-wrap">
+              <canvas id="monthlyChart" width="900" height="320" aria-label="Monthly portfolio flow chart"></canvas>
+            </div>
+
+            <div class="chart-legend">
+              <span><i class="legend-dot blue"></i>Disbursed</span>
+              <span><i class="legend-dot green"></i>Recovered</span>
+              <span><i class="legend-dot pink"></i>Defaulted</span>
+            </div>
+          </article>
+        </section>
+
+        <section class="content-grid">
+          <div class="panel form-panel">
+            <div class="panel-title-row">
+              <h2>Add Monthly Portfolio Activity</h2>
+              <span class="panel-pill alt">Input</span>
+            </div>
+
+            <form id="loanForm">
+              <label>
+                Month
+                <input type="text" id="month" placeholder="Jan 2026" required />
+              </label>
+
+              <label>
+                Amount Disbursed ($)
+                <input type="number" id="amount" placeholder="150000" min="0" required />
+              </label>
+
+              <label>
+                Amount Recovered ($)
+                <input type="number" id="recovered" placeholder="12000" min="0" required />
+              </label>
+
+              <label>
+                Amount Defaulted ($)
+                <input type="number" id="defaulted" placeholder="5000" min="0" required />
+              </label>
+
+              <button type="submit">Save Month</button>
+            </form>
+          </div>
+
+          <div class="panel table-panel">
+            <div class="panel-title-row">
+              <h2>Monthly Breakdown</h2>
+              <span class="panel-pill alt">Live table</span>
+            </div>
+
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Month</th>
+                    <th>Disbursed</th>
+                    <th>Recovered</th>
+                    <th>Defaulted</th>
+                  </tr>
+                </thead>
+                <tbody id="recordsBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+<script src="script.js?v=6"></script>
+  </body>
+</html>
