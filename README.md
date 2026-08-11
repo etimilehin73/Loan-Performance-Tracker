@@ -57,6 +57,13 @@ Then open `.env` and set:
   accepted** — convenient locally, so set it before exposing the app publicly. The older
   single-value `AUTHORIZED_EMAIL` is still read for backwards compatibility.
 
+Also set:
+
+- `SECRET_KEY` — signs the dashboard session token. If omitted, a new key is generated per
+  process, so everyone is signed out whenever the app restarts.
+- `EXPORT_TOKEN` — long-lived token for Power BI (see below). Leave empty to require an
+  interactive session for CSV export.
+
 The access gate never pre-fills your email unless you tick **Remember this email on this device**;
 **Use a different email** clears the saved address.
 
@@ -138,6 +145,8 @@ Netlify cannot run Python, so to keep the Flask backend, deploy on **Render**.
 5. Add these env vars too:
    - `AUTHORIZED_EMAILS` — comma-separated addresses allowed to access the dashboard
    - `SMTP_EMAIL`, `SMTP_PASSWORD` — for sending real Gmail codes (optional)
+   - `SECRET_KEY` — a long random value signing session tokens
+   - `EXPORT_TOKEN` — a long random value for the Power BI CSV feed
    - `FIREBASE_COLLECTION=loan_records`
    - `FIREBASE_VERIFICATIONS_COLLECTION=verification_codes`
 6. Click **Create Web Service**. Render will build and deploy, giving you a public URL like:
@@ -152,10 +161,11 @@ Netlify cannot run Python, so to keep the Flask backend, deploy on **Render**.
 Once deployed, point Power BI to the web data endpoint:
 
 1. In **Power BI Desktop**, choose **Get Data → Web**.
-2. Enter your deployed CSV endpoint:
+2. Enter your deployed CSV endpoint, including the export token:
    ```
-   https://<your-app>.onrender.com/api/export/csv
+   https://<your-app>.onrender.com/api/export/csv?token=<EXPORT_TOKEN>
    ```
+   The endpoint returns `401` without a valid `EXPORT_TOKEN` or dashboard session token.
 3. Load the CSV — it will contain the columns: **Month, Issued, Recovered, Defaulted**.
 4. Refresh the dataset whenever you want the latest data from Firestore.
 
@@ -171,11 +181,15 @@ http://127.0.0.1:5000/api/export/csv
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/health` | Health check + which database is active |
-| GET | `/api/loans` | List all loan records (JSON) |
-| POST | `/api/loans` | Add a loan record |
-| POST | `/api/confirm/request-gmail` | Request a Gmail verification code |
-| POST | `/api/confirm/verify-gmail` | Verify a Gmail code |
-| GET | `/api/export/csv` | Export all loan data as CSV (for Power BI) |
+| GET | `/api/loans` | List all loan records (JSON) — **requires session token** |
+| POST | `/api/loans` | Add a loan record — **requires session token** |
+| POST | `/api/confirm/request-gmail` | Request a Gmail verification code (rate-limited) |
+| POST | `/api/confirm/verify-gmail` | Verify a Gmail code; returns the session token |
+| GET | `/api/export/csv` | Export all loan data as CSV — **requires session token or `?token=<EXPORT_TOKEN>`** |
+
+Verifying a code returns `{"token": "..."}`. Send it as `Authorization: Bearer <token>` on the
+protected endpoints; it expires after `SESSION_TTL_SECONDS` (12 hours by default). The dashboard
+does this for you and re-locks itself when the token is rejected.
 
 ---
 
@@ -184,6 +198,7 @@ http://127.0.0.1:5000/api/export/csv
 - Flask backend with Firebase Firestore (cloud) + SQLite fallback (local)
 - Gmail confirmation access gate (60-second code expiry, rate-limited code requests)
 - Authorization restricted to a configurable list of email addresses
+- Signed session tokens protecting the loan data endpoints
 - Export loan data as CSV for Power BI or reporting
 - Deployable to Render
 

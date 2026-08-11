@@ -56,6 +56,7 @@ const rememberEmailCheckbox = document.getElementById('rememberEmail');
 const clearEmailBtn = document.getElementById('clearEmailBtn');
 
 const REMEMBERED_EMAIL_KEY = 'rememberedGmailEmail';
+const SESSION_TOKEN_KEY = 'dashboardSessionToken';
 
 const accessSummary = document.getElementById('accessSummary');
 const appShell = document.querySelector('.app-shell');
@@ -64,6 +65,21 @@ const isDashboardView = Boolean(totalIssuedEl && totalRecoveredEl && totalDefaul
 let gmailTimer = null;
 let gmailExpiresAt = null;
 let gmailValidated = false;
+
+function sessionToken() {
+  return sessionStorage.getItem(SESSION_TOKEN_KEY) || '';
+}
+
+function authHeaders(extra = {}) {
+  const token = sessionToken();
+  return token ? { ...extra, Authorization: `Bearer ${token}` } : extra;
+}
+
+function clearSession() {
+  sessionStorage.removeItem(SESSION_TOKEN_KEY);
+  sessionStorage.removeItem('gmailValidated');
+  gmailValidated = false;
+}
 
 function rememberedEmail() {
   return localStorage.getItem(REMEMBERED_EMAIL_KEY) || '';
@@ -134,8 +150,15 @@ async function fetchLoanRecords() {
   try {
     const response = await apiFetch('/api/loans', {
       method: 'GET',
-      headers: { 'Accept': 'application/json' }
+      headers: authHeaders({ 'Accept': 'application/json' })
     });
+
+    if (response.status === 401) {
+      clearSession();
+      validateAccessUnlock();
+      records = [];
+      return;
+    }
 
     if (!response.ok) {
       throw new Error('Failed to load loan records from backend');
@@ -156,9 +179,15 @@ async function postLoanRecord(record) {
   try {
     const response = await apiFetch('/api/loans', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(record)
     });
+
+    if (response.status === 401) {
+      clearSession();
+      validateAccessUnlock();
+      return records;
+    }
 
     if (!response.ok) {
       throw new Error('Loan save failed');
@@ -430,10 +459,19 @@ if (verifyGmailBtn) {
 
       gmailValidated = true;
       sessionStorage.setItem('gmailValidated', 'true');
+      if (data.token) {
+        sessionStorage.setItem(SESSION_TOKEN_KEY, data.token);
+      }
       persistEmailPreference(email);
       clearGmailFlow();
       gmailMessage.textContent = 'Gmail confirmed successfully.';
       validateAccessUnlock();
+
+      if (isDashboardView) {
+        await fetchLoanRecords();
+        computeSummary();
+        renderRecords();
+      }
 
       // Only navigate back to index when verifying from confirm.html.
       // On the index page the flow completes in place, so the email
@@ -493,9 +531,10 @@ if (loanForm) {
 }
 
 (async function initializeApp() {
-  const storedValidation = sessionStorage.getItem('gmailValidated') === 'true';
-  if (storedValidation) {
-    gmailValidated = true;
+  // A dashboard session only counts as unlocked while its token is present.
+  gmailValidated = sessionStorage.getItem('gmailValidated') === 'true' && Boolean(sessionToken());
+  if (!gmailValidated) {
+    clearSession();
   }
 
   ['pendingGmailEmail', 'pendingGmailCode'].forEach((legacyKey) => {
@@ -514,7 +553,7 @@ if (loanForm) {
     rememberEmailCheckbox.checked = Boolean(saved);
   }
 
-  if (isDashboardView) {
+  if (isDashboardView && gmailValidated) {
     await fetchLoanRecords();
     computeSummary();
     renderRecords();

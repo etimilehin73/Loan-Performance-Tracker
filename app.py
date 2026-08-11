@@ -1,5 +1,9 @@
+import base64
 import csv
+import hashlib
+import hmac
 import io
+import json
 import os
 import re
 import secrets
@@ -7,6 +11,7 @@ import smtplib
 import time
 from datetime import datetime, timezone
 from email.message import EmailMessage
+from functools import wraps
 from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -60,6 +65,16 @@ AUTHORIZED_EMAILS = _parse_email_list(
     os.getenv('AUTHORIZED_EMAILS', ''),
     os.getenv('AUTHORIZED_EMAIL', ''),
 )
+
+# Secret used to sign dashboard session tokens. Generated per process when
+# unset, which invalidates existing tokens on restart and across gunicorn
+# workers, so set it in production.
+SECRET_KEY = os.getenv('SECRET_KEY') or secrets.token_urlsafe(32)
+SESSION_TTL_SECONDS = int(os.getenv('SESSION_TTL_SECONDS', str(12 * 3600)))
+
+# Long-lived token for unattended CSV readers such as Power BI, passed as
+# ?token=... . When unset the export endpoint only accepts a session token.
+EXPORT_TOKEN = os.getenv('EXPORT_TOKEN', '')
 
 FIREBASE_COLLECTION = os.getenv('FIREBASE_COLLECTION', 'loan_records')
 FIREBASE_VERIFICATIONS_COLLECTION = os.getenv('FIREBASE_VERIFICATIONS_COLLECTION', 'verification_codes')
@@ -340,6 +355,70 @@ def verify_code(channel: str, target: str, code: str):
 
 
 # ---------------------------------------------------------------------------
+# Dashboard session tokens
+# ---------------------------------------------------------------------------
+def _sign(payload: bytes) -> str:
+    digest = hmac.new(SECRET_KEY.encode(), payload, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(digest).decode().rstrip('=')
+
+
+def _b64encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode().rstrip('=')
+
+
+def _b64decode(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + '=' * (-len(value) % 4))
+
+
+def issue_session_token(email: str) -> str:
+    payload = json.dumps({
+        'email': normalize_email(email),
+        'exp': int(time.time()) + SESSION_TTL_SECONDS,
+    }, separators=(',', ':')).encode()
+    body = _b64encode(payload)
+    return f'{body}.{_sign(payload)}'
+
+
+def session_token_email(token: str):
+    """Return the email a valid, unexpired token belongs to, else None."""
+    try:
+        body, signature = (token or '').split('.', 1)
+        payload = _b64decode(body)
+    except (ValueError, TypeError):
+        return None
+
+    if not hmac.compare_digest(signature, _sign(payload)):
+        return None
+
+    try:
+        claims = json.loads(payload)
+    except ValueError:
+        return None
+
+    if claims.get('exp', 0) < int(time.time()):
+        return None
+    if not is_authorized_email(claims.get('email', '')):
+        return None
+    return claims['email']
+
+
+def _bearer_token() -> str:
+    header = request.headers.get('Authorization', '')
+    if header.startswith('Bearer '):
+        return header[len('Bearer '):].strip()
+    return ''
+
+
+def requires_session(view):
+    @wraps(view)
+    def wrapper(*args, **kwargs):
+        if not session_token_email(_bearer_token()):
+            return jsonify({'error': 'Authentication required. Complete email confirmation first.'}), 401
+        return view(*args, **kwargs)
+    return wrapper
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 @app.route('/')
@@ -416,12 +495,18 @@ def verify_gmail():
 
     verified, reason = verify_code('gmail', email_address, code)
     if verified:
-        return jsonify({'success': True, 'message': 'Gmail confirmation verified.'})
+        return jsonify({
+            'success': True,
+            'message': 'Gmail confirmation verified.',
+            'token': issue_session_token(email_address),
+            'expires_in': SESSION_TTL_SECONDS,
+        })
 
     return jsonify({'error': f'Gmail verification failed: {reason}.'}), 400
 
 
 @app.route('/api/loans', methods=['GET', 'POST'])
+@requires_session
 def loans():
     if request.method == 'GET':
         return jsonify(fetch_loan_records())
@@ -449,6 +534,13 @@ def loans():
 
 @app.route('/api/export/csv', methods=['GET'])
 def export_csv():
+    supplied = _bearer_token() or request.args.get('token', '')
+    authorized = bool(session_token_email(supplied)) or (
+        EXPORT_TOKEN and hmac.compare_digest(supplied, EXPORT_TOKEN)
+    )
+    if not authorized:
+        return jsonify({'error': 'A session token or EXPORT_TOKEN is required to export data.'}), 401
+
     rows = fetch_loan_records()
     output = io.StringIO()
     writer = csv.writer(output)
