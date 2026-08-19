@@ -30,7 +30,7 @@ DEFAULT_RECORDS = [
 
 MAILGUN_DOMAIN = os.getenv('MAILGUN_DOMAIN')
 MAILGUN_API_KEY = os.getenv('MAILGUN_API_KEY')
-AUTHORIZED_EMAILS = tuple(
+AUTHORIZED_EMAIL = tuple(
     email.strip().lower()
     for email in os.getenv('AUTHORIZED_EMAIL', '').split(',')
     if email.strip()
@@ -347,6 +347,54 @@ def request_gmail():
         'success': True,
         'message': 'Verification code sent to your Gmail inbox.',
         'expires_in': expires_at - int(time.time())
+    })
+
+@app.route('/api/confirm/verify-gmail', methods=['POST'])
+def verify_gmail():
+    payload = request.get_json(silent=True) or {}
+
+    email_address = (payload.get('email') or '').strip().lower()
+    code = (payload.get('code') or '').strip()
+
+    if not email_address:
+        return jsonify({
+            'error': 'Email address is required.'
+        }), 400
+
+    if not code:
+        return jsonify({
+            'error': 'Verification code is required.'
+        }), 400
+
+    if not is_authorized_email(email_address):
+        return jsonify({
+            'error': 'Email address is not authorized for this application.'
+        }), 403
+
+    verified, error = verify_code(
+        'gmail',
+        email_address,
+        code
+    )
+
+    if not verified:
+        if error == 'code has expired':
+            return jsonify({
+                'error': 'The verification code has expired. Please request a new code.'
+            }), 400
+
+        if error == 'code has already been used':
+            return jsonify({
+                'error': 'This verification code has already been used.'
+            }), 400
+
+        return jsonify({
+            'error': 'Invalid verification code.'
+        }), 400
+
+    return jsonify({
+        'success': True,
+        'message': 'Gmail verification successful.'
     })
 
 @app.route('/api/loans', methods=['GET', 'POST'])
