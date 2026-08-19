@@ -337,7 +337,7 @@ def request_gmail():
 def request_gmail():
     payload = request.get_json(silent=True) or {}
 
-    email_address = (payload.get('email') or '').strip()
+    email_address = (payload.get('email') or '').strip().lower()
 
     if not email_address:
         return jsonify({
