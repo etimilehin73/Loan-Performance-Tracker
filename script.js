@@ -125,6 +125,19 @@ function saveLocalRecords() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
 }
 
+async function readJsonResponse(response) {
+    const contentType = response.headers.get('content-type') || '';
+
+    if (!contentType.includes('application/json')) {
+        const text = await response.text();
+        throw new Error(
+            `Server returned ${response.status} instead of JSON. ${text.slice(0, 200)}`
+        );
+    }
+
+    return await response.json();
+}
+
 async function apiFetch(path, options = {}) {
   const requestUrl = `${API_ROOT}${path}`;
 
@@ -407,7 +420,7 @@ if (requestGmailBtn) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email })
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response);
       if (!response.ok) {
         gmailMessage.textContent = data.error || 'Unable to request Gmail code.';
         if (data.details) {
@@ -448,7 +461,7 @@ if (verifyGmailBtn) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, code: entry })
       });
-      const data = await response.json();
+      const data = await readJsonResponse(response);
       if (!response.ok) {
         gmailMessage.textContent = data.error || 'Gmail verification failed.';
         return;
