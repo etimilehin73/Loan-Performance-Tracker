@@ -308,31 +308,6 @@ def health():
         'firebase_error': _firebase_error,
     })
 
-
-@app.route('/api/confirm/request-gmail', methods=['POST'])
-def request_gmail():
-    payload = request.get_json(force=True)
-    email_address = (payload.get('email') or '').strip()
-    if not email_address:
-        return jsonify({'error': 'Email address is required.'}), 400
-    if not is_authorized_email(email_address):
-        return jsonify({'error': 'Email address is not authorized for this application.'}), 403
-    code = generate_code()
-    expires_at = store_verification('gmail', email_address, code)
-    sent, error = send_mailgun_message(email_address, code)
-
-    return jsonify({
-            'error': 'Mailgun provider is not configured or failed to send. Configure MAILGUN_DOMAIN and MAILGUN_API_KEY to send the code to the email address.',
-            'details': error,
-        }), 500
-
-    return jsonify({
-        'success': True,
-        'message': 'Access code request processed.',
-        'expires_in': expires_at - int(time.time()),
-    })
-
-
 @app.route('/api/confirm/request-gmail', methods=['POST'])
 def request_gmail():
     payload = request.get_json(silent=True) or {}
