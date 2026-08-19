@@ -18,7 +18,7 @@ load_dotenv(BASE_DIR / '.env')
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path='')
 CORS(app, resources={r"/api/*": {"origins": "*"}}, send_wildcard=True)
 
-ACCESS_TIMEOUT_SECONDS = 60
+ACCESS_TIMEOUT_SECONDS = 600
 
 DEFAULT_RECORDS = [
     {'month': 'Jan 2026', 'issued': 120000, 'recovered': 14000, 'defaulted': 2500},
@@ -324,14 +324,6 @@ def request_gmail():
     code = generate_code()
     expires_at = store_verification('gmail', email_address, code)
     sent, error = send_mailgun_message(email_address, code)
-    if not sent:
-        if 'Mailgun configuration is missing' in (error or ''):
-            return jsonify({
-                'success': True,
-                'message': 'Access code generated in demo mode. Use the displayed code to continue.',
-                'expires_in': expires_at - int(time.time()),
-                'debug_code': code,
-            })
 
         return jsonify({
             'error': 'Mailgun provider is not configured or failed to send. Configure MAILGUN_DOMAIN and MAILGUN_API_KEY to send the code to the email address.',
@@ -345,22 +337,46 @@ def request_gmail():
     })
 
 
-@app.route('/api/confirm/verify-gmail', methods=['POST'])
-def verify_gmail():
-    payload = request.get_json(force=True)
+@app.route('/api/confirm/request-gmail', methods=['POST'])
+def request_gmail():
+    payload = request.get_json(silent=True) or {}
+
     email_address = (payload.get('email') or '').strip()
-    code = (payload.get('code') or '').strip()
-    if not email_address or not code:
-        return jsonify({'error': 'Email address and code are required.'}), 400
+
+    if not email_address:
+        return jsonify({
+            'error': 'Email address is required.'
+        }), 400
+
     if not is_authorized_email(email_address):
-        return jsonify({'error': 'Email address is not authorized for this application.'}), 403
+        return jsonify({
+            'error': 'Email address is not authorized for this application.'
+        }), 403
 
-    verified, reason = verify_code('gmail', email_address, code)
-    if verified:
-        return jsonify({'success': True, 'message': 'Gmail confirmation verified.'})
+    # Do not generate/store a code unless email delivery is configured.
+    if not (MAILGUN_DOMAIN and MAILGUN_API_KEY):
+        return jsonify({
+            'error': 'Email delivery is not configured on the server.'
+        }), 500
 
-    return jsonify({'error': f'Gmail verification failed: {reason}.'}), 400
+    code = generate_code()
 
+    sent, error = send_mailgun_message(email_address, code)
+
+    if not sent:
+        return jsonify({
+            'error': 'Unable to send the verification code to Gmail.',
+            'details': error
+        }), 502
+
+    # Store the code only after Mailgun accepts the message.
+    expires_at = store_verification('gmail', email_address, code)
+
+    return jsonify({
+        'success': True,
+        'message': 'Verification code sent to your Gmail inbox.',
+        'expires_in': expires_at - int(time.time())
+    })
 
 @app.route('/api/loans', methods=['GET', 'POST'])
 def loans():
