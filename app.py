@@ -30,15 +30,11 @@ DEFAULT_RECORDS = [
 
 MAILGUN_DOMAIN = os.getenv('MAILGUN_DOMAIN')
 MAILGUN_API_KEY = os.getenv('MAILGUN_API_KEY')
-DEFAULT_AUTHORIZED_EMAIL = 'executive.confirmation@gmail.com'
-AUTHORIZED_EMAILS = tuple(dict.fromkeys([
+AUTHORIZED_EMAILS = tuple(
     email.strip().lower()
-    for email in [
-        os.getenv('AUTHORIZED_EMAIL', ''),
-        DEFAULT_AUTHORIZED_EMAIL,
-    ]
-    if email and email.strip()
-]))
+    for email in os.getenv('AUTHORIZED_EMAIL', '').split(',')
+    if email.strip()
+)
 
 FIREBASE_COLLECTION = os.getenv('FIREBASE_COLLECTION', 'loan_records')
 FIREBASE_VERIFICATIONS_COLLECTION = os.getenv('FIREBASE_VERIFICATIONS_COLLECTION', 'verification_codes')
@@ -424,8 +420,6 @@ def export_csv():
 if __name__ == '__main__':
     if not _use_firestore():
         _initialize_sqlite()
-    app.run(host='0.0.0.0', port=int(os.getenv('PORT', '5000')), debug=True)
 
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.getenv('PORT', '5000')), debug=True)
+    port = int(os.getenv('PORT', '5000'))
+    app.run(host='0.0.0.0', port=port, debug=True)
