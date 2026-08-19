@@ -22,7 +22,7 @@ const API_ROOT = (() => {
   return '';
 })();
 
-const ACCESS_TIMEOUT_SECONDS = 60;
+const ACCESS_TIMEOUT_SECONDS = 600;
 const defaultRecords = [
   { month: 'Jan 2026', issued: 120000, recovered: 14000, defaulted: 2500 },
   { month: 'Feb 2026', issued: 126000, recovered: 15000, defaulted: 3200 },
@@ -422,13 +422,10 @@ if (requestGmailBtn) {
       // Keep the flow on the current page — no redirect, so the email
       // input keeps whatever was typed into it.
       beginGmailCountdown(Number(data.expires_in) || ACCESS_TIMEOUT_SECONDS);
-      if (gmailMessage) {
-        let message = data.message || 'Gmail code sent. Check your inbox.';
-        if (data.debug_code) {
-          message += ` Demo code: ${data.debug_code}`;
-        }
-        gmailMessage.textContent = message;
-      }
+     if (gmailMessage) {
+    gmailMessage.textContent =
+        data.message || 'Verification code sent. Check your Gmail inbox.';
+}
     } catch (error) {
       gmailMessage.textContent = `Unable to contact backend for Gmail request. Ensure the backend is running at http://127.0.0.1:5000. ${error.message || error}`;
     }
