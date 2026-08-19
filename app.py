@@ -321,7 +321,7 @@ def request_gmail():
     expires_at = store_verification('gmail', email_address, code)
     sent, error = send_mailgun_message(email_address, code)
 
-        return jsonify({
+    return jsonify({
             'error': 'Mailgun provider is not configured or failed to send. Configure MAILGUN_DOMAIN and MAILGUN_API_KEY to send the code to the email address.',
             'details': error,
         }), 500
