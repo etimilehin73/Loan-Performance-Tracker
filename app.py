@@ -77,7 +77,7 @@ except Exception as exc:  # pragma: no cover
 
 
 def is_authorized_email(email: str) -> bool:
-    return normalize_email(email) in AUTHORIZED_EMAILS
+    return normalize_email(email) in AUTHORIZED_EMAIL
 
 
 def generate_code():
